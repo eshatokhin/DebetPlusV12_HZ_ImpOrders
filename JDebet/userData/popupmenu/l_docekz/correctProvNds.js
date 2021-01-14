@@ -44,7 +44,7 @@ function userMenuRun(nID)
 
 			if (oA.escape)
 			{
-				return;
+				return false;
 			}
 
 			var oSc = oA.get("SC");
@@ -57,6 +57,7 @@ function userMenuRun(nID)
 			});
 
 			alert(ru("Выполнено!", "Виконано!"));
+
 			break;
 	}
 }
