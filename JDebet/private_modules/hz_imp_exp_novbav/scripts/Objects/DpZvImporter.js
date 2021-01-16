@@ -4,17 +4,23 @@ include("sys/Path.js");
 
 function DpZvImporter(path)
 {
-	RO("DpZvImporter", this);
 	this.load = DpZvImporter_load;
 	this.createZV = DpZvImporter_createZV;
+	this.createTables = DpZvImporter_createTables;
 
 	this.path = path;
-	this.tmpHZV = "";
-	this.tmpRZV = "";
+
+	this.tmpHZV = getTmpTableName();
+	this.tmpRZV = getTmpTableName();
 }
 
 function DpZvImporter_load()
 {
+	if (isEmpty(this.path))
+	{
+		throw new Error(ru("Не указан путь к json-файлу, импорт прерван.", "Не вказаний шлях до json-файлу, імпорт перерваний."));
+	}
+
 	// определимся что нам передали: файл или папку с файлами
 	var isDirectory = new DpFile(this.path).isDirectory();
 
@@ -38,9 +44,7 @@ function DpZvImporter_load()
 	}
 
 	// создадим таблицы заголовка и строк заказов, чтобы туда прочитать содержимое файлов
-	this.tmpHZV = getTmpTableName();
-	this.tmpRZV = getTmpTableName();
-	createTables(this.tmpHZV, this.tmpRZV);
+	this.createTables();
 
 	for (var i in aFiles)
 	{
@@ -77,6 +81,7 @@ function DpZvImporter_load()
 							mOrderId = m[fld];
 						}
 
+						// запомним имя файла, из которого выполняется импорт
 						m["FFILE"] = fileName;
 					}
 					else
@@ -92,6 +97,8 @@ function DpZvImporter_load()
 							for (var fldRow in oRow)
 							{
 								r[fldRow] = oRow[fldRow];
+
+								// ID заголовка
 								r["ORDER_ID"] = mOrderId;
 							}
 							aRowEntities.push(r);
@@ -105,13 +112,13 @@ function DpZvImporter_load()
 		}
 	}
 
-	this.createZV(this.tmpHZV, this.tmpRZV);
+	this.createZV();
 }
 
 /**
  * создание таблиц заголовка и строк заказов, чтобы туда прочитать содержимое JSON файлов
  */
-function createTables(tblH, tblR)
+function DpZvImporter_createTables()
 {
 	// таблица заголовков
 	var fld = {};
@@ -120,8 +127,19 @@ function createTables(tblH, tblR)
 	fld.FSHOP = "LONG";
 	fld.ORDER_ID = "LONG";
 	fld.FFILE = "TEXT";
+
+	fld.FDRIVER = "LONG";
+	fld.FPODR = "LONG";
+	fld.FEXPED = "LONG";
+	fld.FMOL = "LONG";
+	fld.FAVTO = "LONG";
+	fld.FTIME = "DATETIME";
+	fld.FROUTE = "LONG";
+	fld.FLYST = "TEXT";
+	fld.FINSPECTOR = "LONG";
+
 	fld.FWID = "LONG";
-	CreateTable(tblH, fld);
+	CreateTable(this.tmpHZV, fld);
 
 	// таблица строк
 	var fld = {};
@@ -131,49 +149,48 @@ function createTables(tblH, tblR)
 	fld.ORDER_ID = "LONG";
 	fld.FID_DOC = "LONG";
 	fld.FWID = "LONG";
-	CreateTable(tblR, fld);
+	CreateTable(this.tmpRZV, fld);
 
 	return true;
 }
 
-function DpZvImporter_createZV(tblH, tblR)
+function DpZvImporter_createZV()
 {
 	// установим ID номенклатуры
-	strSQL = "UPDATE "+tblR
+	strSQL = "UPDATE "+this.tmpRZV
 			+" SET FNMKL_ID = ("
 				+" SELECT FWID FROM ^CL_NMK"
-				+" WHERE FCOD = "+tblR+".FNMKL"
+				+" WHERE FCOD = "+this.tmpRZV+".FNMKL"
 			+")"
 			+" WHERE EXISTS ("
 				+" SELECT 1 FROM ^CL_NMK"
-				+" WHERE FCOD = "+tblR+".FNMKL"
+				+" WHERE FCOD = "+this.tmpRZV+".FNMKL"
 			+")"
 	ExecuteSQL(strSQL);
 
 	// fwid'ы заголовка и строк
-	resetTableUids(tblH, "FWID");
-	resetTableUids(tblR, "FWID");
+	resetTableUids(this.tmpHZV, "FWID");
+	resetTableUids(this.tmpRZV, "FWID");
 
-	strSQL = "UPDATE "+tblR
+	strSQL = "UPDATE "+this.tmpRZV
 			+" SET FID_DOC = ("
-				+" SELECT FWID FROM "+tblH
-				+" WHERE ORDER_ID = "+tblR+".ORDER_ID"
+				+" SELECT FWID FROM "+this.tmpHZV
+				+" WHERE ORDER_ID = "+this.tmpRZV+".ORDER_ID"
 			+")"
 			+" WHERE EXISTS ("
-				+" SELECT FWID FROM "+tblH
-				+" WHERE ORDER_ID = "+tblR+".ORDER_ID"
+				+" SELECT FWID FROM "+this.tmpHZV
+				+" WHERE ORDER_ID = "+this.tmpRZV+".ORDER_ID"
 			+")"
 	ExecuteSQL(strSQL);
 
 	// проанализируем, есть ли в базе заказы, которые есть в json-файле
 	var aDocs = [];
 	var tmpExists = getTmpTableName();
-	strSQL = "SELECT FDOC_NUM, FDOC_DAT, FNOP, FWID"
+	strSQL = "SELECT DISTINCT H.FDOC_NUM, H.FDOC_DAT, H.FNOP, TMP.FWID"
 			+" INTO "+tmpExists
-			+" FROM ^HZV"
-			+" WHERE FOUTID IN ("
-				+" SELECT ORDER_ID FROM "+tblH
-			+" )"
+			+" FROM ^HZV H INNER JOIN "+this.tmpHZV+" TMP ON H.FOUTID = TMP.ORDER_ID"
+	ExecuteSQL(strSQL);
+
 	forEachSQL("SELECT * FROM "+tmpExists+" ORDER BY FDOC_DAT, FDOC_NUM", function(item)
 	{
 		aDocs.push("№ "+item.FDOC_NUM+" "+ru("от", "від")+" "+d_m_y(item.FDOC_NUM)+", папка "+item.FNOP)
@@ -186,9 +203,17 @@ function DpZvImporter_createZV(tblH, tblR)
 			+"\nодинаковые заказы. При переносе они будут пропущены."
 			+"\nДля дполнительного анализа воспользуйтесь функцией"
 			+"\nсравнения базы и json-файла."
-			+"\nВот список одинаковых заказов:"
+			+"\nСписок одинаковых заказов:"
 			+"\n"+aDocs.join("; ")
-		alert(strMsgRu);
+
+		var strMsgUr = "Увага!"
+			+"\nВ базі та в файлі, який імпортується, вже існують "
+			+"\nоднакові замовлення. При переносі вони будуть пропущені."
+			+"\nДля додаткового аналізу скористайтесь функцією"
+			+"\nпорівняння бази та json-файлу."
+			+"\nСписок однакових замовлень:"
+			+"\n"+aDocs.join("; ")
+		alert(strMsgRu, strMsgUr);
 
 		if (!confirm(ru("Продолжить создание заказов?", "Продовжити створення замовлень?")))
 		{
@@ -197,18 +222,60 @@ function DpZvImporter_createZV(tblH, tblR)
 	}
 
 	// не импортируем то, что уже есть в базе
+	strSQL = "DELETE FROM "+this.tmpHZV
+			+" WHERE FWID IN ("
+				+" SELECT FWID FROM "+tmpExists
+			+")"
+	ExecuteSQL(strSQL);
 
+	strSQL = "DELETE FROM "+this.tmpRZV
+			+" WHERE FID_DOC IN ("
+				+" SELECT FWID FROM "+tmpExists
+			+")"
+	ExecuteSQL(strSQL);
+
+	// проставляем остальные данные, которые есть в документе ZV
+
+	// форма
+	var sprVD = 42;
+	var tblExtName42 = new DpExtensionManager("CL", sprVD).getFullValueTableName();
+	var tblExtName12 = new DpExtensionManager("CL", sprOrg).getFullValueTableName();
+
+	var tmpNop = getTmpTableName();
+	var fld = {};
+	fld.FFORM = "LONG";
+	fld.FFORM_TXT = "TEXT";
+	fld.FNOP = "LONG";
+	fld.FWID = "COUNTER";
+	CreateTable(tmpNop, fld);
+
+	for (var i = 0; i <= 6; i++)
+	{
+		if (!isEmpty(tblExtName42) && !isEmpty(tblExtName12))
+		{
+			strSQL = "INSERT INTO "+tmpNop+" (FFORM, FFORM_TXT, FNOP)"
+					+" SELECT L42.FCOD AS FFORM, L42.FTXT AS FFORM_TXT"
+						+", EXT42.FNOP"
+					+" FROM "+this.tmpHZV+" H"
+						+" INNER JOIN ^LISTCL L12 ON H.FDBKR = L12.FCOD AND L12.FCL = "+sqlTo(sprOrg)
+						+" INNER JOIN "+tblExtName12+" EXT12 ON L12.FWID_CL = EXT12.FMAINWID"
+						+" INNER JOIN ^LISTCL L42 ON L42.FCOD = EXT12.FORM"+String(i)+" AND L42.FCL = "+sqlTo(sprVD)
+						+" INNER JOIN "+tblExtName42+" EXT42 ON L42.FWID_CL = EXT42.FMAINWID"
+			ExecuteSQL(strSQL);
+		}
+	}
 	DropTable(tmpExists);
 }
 
 /*
+runInThread(function()
+{
 try {
-			include("hz_imp_exp_novbav:Objects/DpZvImporter.js");
-			runInTransaction(function()
-			{
-				var oZvImporter = new DpZvImporter();
-				oZvImporter.path = getPar("HZ_IMP_EXP_NOVBAV_MOBAPP_ZV_DIR");
-				oZvImporter.load();
-			});
+	include("hz_imp_exp_novbav:Objects/DpZvImporter.js");
+	var oZvImporter = new DpZvImporter();
+	oZvImporter.path = getPar("HZ_IMP_EXP_NOVBAV_MOBAPP_ZV_DIR");
+	oZvImporter.load();
 } catch (ex) { globalExceptionHandler(ex); }
+});
+
 */
