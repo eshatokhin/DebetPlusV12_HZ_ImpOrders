@@ -1,0 +1,4 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<SUBSYS>
+	<sys label="HZIMPEXPNOVBAV" text="Імпорт/експорт даних|Иморт/экспорт данных" iconpath="icons/import.gif"/>
+</SUBSYS>

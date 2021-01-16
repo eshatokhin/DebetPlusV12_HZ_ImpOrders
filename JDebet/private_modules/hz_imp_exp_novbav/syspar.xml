@@ -1,0 +1,11 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<System type="group" text="Параметри системи|Параметры системы">
+<HZ_IMP_EXP_NOVBAV text="Імпорт/експорт даних ТОВ Хлібозавод &quot;Новобаварський&quot;|Импорт/экспорт данных ООО Хлебзавод &quot;Новобаварский&quot;" sys="ADM_HZIMPEXPNOVBAV" type="group" useproxy="true">
+	<HZ_IMP_EXP_NOVBAV_MOBAPP_ZV type="group" text="Імпорт замовлень з JSON-файлу мобільного додатку &quot;Debet+ connector&quot;|Импорт данных из JSON-файла мобильного приложения &quot;Debet+ connector&quot;">
+		<HZ_IMP_EXP_NOVBAV_MOBAPP_ZV_DIR type="param" partype="dir" default="" vid="u" text="Папка з JSON-файлами замовлень мобільного додатку|Папка с JSON-файлами заказов мобильного приложения" />
+		<HZ_IMP_EXP_NOVBAV_MOBAPP_ZV_DIR_PROCESSED type="param" partype="dir" default="" vid="u" text="Папка з обробленими JSON-файлами замовлень мобільного додатку|Папка с обработанными JSON-файлами заказов мобильного приложения" />
+		<HZ_IMP_EXP_NOVBAV_MOBAPP_ZV_CLFRM type="param" partype="DpClcl" vid="o" default="42" text="Номер довідника видів діяльності (форми)|Номер справочника видов деятельности (формы)" />
+		<HZ_IMP_EXP_NOVBAV_MOBAPP_ZV_DEF_FRM type="param" vid="o" partype="DpCl" cl="HZ_IMP_EXP_NOVBAV_MOBAPP_ZV_CLFRM" default="1" text="Форма за замовчуванням для створення замовлень, якщо у контрагента не вказаний вид форми для жодного з днів тижня|Форма по умолчанию для создания заказов, если у контрагента не указан вид формы ни для одного из дней недели" />
+	</HZ_IMP_EXP_NOVBAV_MOBAPP_ZV>
+</HZ_IMP_EXP_NOVBAV>
+</System>
