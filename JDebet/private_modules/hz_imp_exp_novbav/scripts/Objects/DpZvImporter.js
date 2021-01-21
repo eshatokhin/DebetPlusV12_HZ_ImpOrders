@@ -4,6 +4,7 @@ include("sys/Path.js");
 include("sys/Args.js");
 include("Objects/dpCmp.js");
 include("hz:servis/hz.js");
+include("doc/DpDoc.js");
 
 function DpZvImporter(path)
 {
@@ -21,7 +22,8 @@ function DpZvImporter(path)
 	this.mol = 0;
 	this.podr = 0;
 	this.inspector = 0;
-
+	this.tmpExists = getTmpTableName();
+	this.isRecreate = false;
 	this.tmpHZV = null;
 	this.tmpRZV = null;
 	this.aFiles = [];
@@ -319,8 +321,9 @@ function DpZvImporter_prepareData(bComapre)
 	bComapre = args.bComapre;
 
 	var self = this;
+
 	// проверим валидность полей
-	self.checkValid(true);
+	self.checkValid(true, true);
 
 	if (!self.checkDirectory())
 	{
@@ -354,27 +357,25 @@ function DpZvImporter_prepareData(bComapre)
 			+")"
 	ExecuteSQL(strSQL);
 
-	// проанализируем, есть ли в базе заказы, которые есть в json-файле
-	var aDocs = [];
-	var tmpExists = getTmpTableName();
+	var tmpOrdersExists = getTmpTableName();
 	strSQL = "SELECT DISTINCT H.FDOC_NUM, H.FDOC_DAT, H.FNOP, TMP.FWID"
-			+" INTO "+tmpExists
+			+" INTO "+tmpOrdersExists
 			+" FROM ^HZV H INNER JOIN "+self.tmpHZV+" TMP ON H.FOUTID = " + Convert("TMP.ORDER_ID", "NVC")
 	ExecuteSQL(strSQL);
 
-	var tbl = OpenTable("SELECT * FROM "+tmpExists+" ORDER BY FNOP, FDOC_DAT, FDOC_NUM");
+	var tbl = OpenTable("SELECT * FROM "+tmpOrdersExists+" ORDER BY FNOP, FDOC_DAT, FDOC_NUM");
 	if (!bComapre && !tbl.IsEmpty())
 	{
 		var strMsgRu = "Внимание!"
-			+"\nВ базе и в файле, который импортируется, уже есть"
-			+" одинаковые заказы. При переносе они будут пропущены."
+			+"\nВ базе и в файле, который импортируется, есть"
+			+" заказы с одинаковыми идентификаторами. При переносе они будут пропущены."
 			+" Для дополнительного анализа воспользуйтесь функцией"
 			+" сравнения базы и json-файла."
 			+" Список одинаковых заказов:"
 
 		var strMsgUr = "Увага!"
-			+"\nВ базі та в файлі, який імпортується, вже існують"
-			+" однакові замовлення. При переносі вони будуть пропущені."
+			+"\nВ базі та в файлі, який імпортується, існують"
+			+" замовлення з однаковими ідентифікаторами. При переносі вони будуть пропущені."
 			+" Для додаткового аналізу скористайтесь функцією"
 			+" порівняння бази та json-файлу."
 			+" Список однакових замовлень:"
@@ -407,17 +408,99 @@ function DpZvImporter_prepareData(bComapre)
 	if (!bComapre)
 	{
 		// не импортируем то, что уже есть в базе
-		strSQL = "DELETE FROM "+self.tmpHZV
+		strSQL = "DELETE FROM " + self.tmpHZV
 				+" WHERE FWID IN ("
-					+" SELECT FWID FROM "+tmpExists
+					+" SELECT FWID FROM " + tmpOrdersExists
 				+")"
 		ExecuteSQL(strSQL);
 
 		strSQL = "DELETE FROM "+self.tmpRZV
 				+" WHERE FID_DOC IN ("
-					+" SELECT FWID FROM "+tmpExists
+					+" SELECT FWID FROM " + tmpOrdersExists
 				+")"
 		ExecuteSQL(strSQL);
+	}
+	DropTable(tmpOrdersExists);
+
+	// проанализируем, есть ли в базе заказы, которые есть в json-файле
+	strSQL = "SELECT DISTINCT H.FWID AS FZVWID, H.FID_NAKL as FID_NAKL, "
+				+ "H.FDOC_NUM, H.FDOC_DAT, H.FNOP, TMP.FWID, H.FSHOP, TMP.FROUTE, "
+				+ "H.FDBKR, SCH.FDOC_NUM as FNUM_NAKL, SCH.FDOC_DAT as FDOC_DAT_NAKL,"
+				+ "H.FDOC, H.FDOC_NAKL, H.FNOP_NAKL"
+			+" INTO "+self.tmpExists
+			+" FROM ^HZV H INNER JOIN "+self.tmpHZV+" TMP ON H.FSHOP = TMP.FSHOP "
+				+ " AND H.FDBKR = TMP.FDBKR AND H.FDOC_DAT=TMP.FDOC_DAT"
+				+ " INNER JOIN ^RZV R on R.FID_DOC= H.FWID AND R.FROUTE = TMP.FROUTE "
+				+ " LEFT JOIN ^SCH_ZAG SCH on SCH.FDOC = H.FDOC_NAKL AND SCH.FNOP = H.FNOP_NAKL AND SCH.FWID = H.FID_NAKL"
+	ExecuteSQL(strSQL);
+
+	if (!bComapre)
+	{
+		var strMsgRu = "Внимание!"
+			+"\nВ базе и в файле, который импортируется, уже есть"
+			+" одинаковые заказы."
+			+"\nСписок одинаковых заказов:"
+
+		var strMsgUr = "Увага!"
+			+"\nВ базі та в файлі, який імпортується, вже існують"
+			+" однакові замовлення."
+			+"\nСписок однакових замовлень:"
+
+		strSQL = "select * from " + self.tmpExists;
+
+		var msg = "";
+		var i=1;
+
+		forEachSQL(strSQL, function(it)
+		{
+			msg += i + " | Папка: " + it.FNOP;
+			msg += " | № документа: " + it.FDOC_NUM;
+			msg += " | Дата документа: " + format("dd.mm.yyyy",it.FDOC_DAT);
+			msg += " | Магазин: " + it.FSHOP;
+			msg += " | Покуппець: " + it.FDBKR;
+			msg += " | Маршрут: " + it.FROUTE;
+
+			if (!isEmpty(it.FNUM_NAKL))
+			{
+				msg += " | Накладна: №" + it.FNUM_NAKL
+				msg += " | Дата документа: " + format("dd.mm.yyyy", it.FDOC_DAT_NAKL)
+			}
+
+			msg += "\n"
+			i++;
+		});
+
+		if (!isEmpty(msg))
+		{
+			var oMsg = new DpMsgBox();
+			oMsg.set("!kzs", strMsgUr + "\n\n" + msg, ru("Заказы, которые уже существуют в программе", "Замовлення, які вже існують в програмі"));
+			var answer = oMsg.ask();
+
+			switch(answer)
+			{
+				case "k":
+					// не импортируем то, что уже есть в базе
+					strSQL = "DELETE FROM "+self.tmpHZV
+							+" WHERE FWID IN ("
+								+" SELECT FWID FROM "+self.tmpExists
+							+")"
+					ExecuteSQL(strSQL);
+
+					strSQL = "DELETE FROM "+self.tmpRZV
+							+" WHERE FID_DOC IN ("
+								+" SELECT FWID FROM "+self.tmpExists
+							+")"
+					ExecuteSQL(strSQL);
+
+					break;
+				case "z":
+					this.isRecreate = true;
+					break;
+				case "c":
+				default:
+					throw new Error(ru("Отменено пользователем", "Відмінено користувачем"));
+			}
+		}
 	}
 
 	// Контрагент -> по семи расширениям спр.12 определяем форму (справочник 42), к которой будет оноситься заказ ->
@@ -498,7 +581,7 @@ function DpZvImporter_prepareData(bComapre)
 	});
 
 	// теперь настройка расширений, вытянем за каждый день форму
-	strSQL = "SELECT DISTINCT FDBKR, FROUTE FROM "+tmpTune
+	strSQL = "SELECT DISTINCT FDBKR, FROUTE FROM " + tmpTune
 	forEachSQL(strSQL, function(item)
 	{
 		for (var i = 0; i <= 6; i++)
@@ -684,7 +767,32 @@ function DpZvImporter_prepareData(bComapre)
 			+")"
 	ExecuteSQL(strSQL);
 
-	DropTable(tmpExists);
+	// по результатам разговора с Сергеем:
+	// если в файле есть "одинаковые" заявки, берем последнюю.
+	// "Одинаковость" заключается в том, что у заявок одинаковые значения fdbkr, fshop.
+	var tmpDist = getTmpTableName();
+	strSQL = "select s.fdbkr, s.fshop, max(s.order_id) as order_id"
+			+", count(s.order_id) as fcnt"
+			+" into "+tmpDist
+			+" from "+self.tmpHZV+" s"
+			+" group by s.fdbkr, s.fshop"
+	ExecuteSQL(strSQL);
+
+	strSQL = "delete from "+self.tmpHZV
+			+" where 1=1"
+				+" and order_id not in ("
+					+" select order_id from "+tmpDist
+				+")"
+	ExecuteSQL(strSQL);
+
+	strSQL = "delete from "+self.tmpRZV
+			+" where 1=1"
+				+" and order_id not in ("
+					+" select order_id from "+tmpDist
+				+")"
+	ExecuteSQL(strSQL);
+	DropTable(tmpDist);
+
 	var oRet = {};
 	oRet.tblH = self.tmpHZV;
 	oRet.tblR = self.tmpRZV;
@@ -737,13 +845,36 @@ function DpZvImporter_createZV(isSilent)
 	var docNum = "";
 	var aKolDocs = [];
 	aKolDocs[0] = 0;
+
+	if (self.isRecreate)
+	{
+		runInTransaction(function()
+		{
+			strSQL = " select * from " + self.tmpExists
+			forEachSQL(strSQL, function(it)
+			{
+				var oDoc = new DpDoc(it.FDOC, it.FNOP);
+				oDoc.del(it.FZVWID);
+			});
+
+			strSQL = " select * from " + self.tmpExists + " where fid_nakl is not null or fid_nakl <> 0"
+			forEachSQL(strSQL, function(it)
+			{
+				var oDoc = new DpDoc(it.FDOC_NAKL, it.FNOP_NAKL);
+				oDoc.del(it.FID_NAKL);
+			});
+		});
+	}
+
 	strSQL = "select distinct fnop from "+self.tmpHZV
 	forEachSQL(strSQL, function(item)
 	{
 		aKolDocs[item.FNOP] = 0;
 	});
 
-	strSQL = "SELECT * FROM "+self.tmpHZV
+	var naklIds = [];
+
+	strSQL = "SELECT * FROM " + self.tmpHZV
 	forEachSQL(strSQL, function(hItem)
 	{
 		var mainFwid = hItem.FWID;
@@ -764,6 +895,7 @@ function DpZvImporter_createZV(isSilent)
 		var numStr = 0;
 		var kol = 0;
 
+
 		strSQL = "select * from "+self.tmpRZV
 				+" where order_id = "+sqlTo(order_id)
 		forEachSQL(strSQL, function(rItem)
@@ -771,11 +903,11 @@ function DpZvImporter_createZV(isSilent)
 			var oRow = oDoc.createRow("ROW");
 			if (!isEmpty(oRow))
 			{
+				var kolRow = rItem.FKOL;
 				numStr++;
 				oRow.setVar("RID", rItem.FWID);
 				oRow.setVar("RDBKR", dbkr);
 				oRow.setVar("RNOM", numStr);
-				var kolRow = rItem.FKOL;
 				oRow.setVar("RKOL", kolRow);
 				oRow.setVar("RNMKL", rItem.FNMKL_ID);
 				oRow.setVar("RROUTE", route);
@@ -818,10 +950,33 @@ function DpZvImporter_createZV(isSilent)
 		// нужно чтобы записались часы и минуты, так как oDoc.setVar их отрезает
 		strSQL = "UPDATE ^HZV SET FTIME = "+sqlDateTo(mFtime)+" WHERE FWID = "+sqlTo(mainFwid)
 		ExecuteSQL(strSQL);
+
+		if (self.isRecreate)
+		{
+			var strSQLexists = "select * from " + self.tmpExists + " where fwid = " + sqlTo(mainFwid);
+			var snE = snapRecord(strSQLexists);
+
+			if (snE)
+			{
+				if (snE.FID_NAKL)
+				{
+					naklIds.push(mainFwid);
+				}
+			}
+		}
 	}, null, new ModalProgressProvider(function(item, rateProvider)
 	{
 		return ru("Создание документа заказа № "+docNum, "Створення документу замовлення № "+docNum);
 	}));
+
+	if (self.isRecreate)
+	{
+		if(naklIds.length)
+		{
+			include("hz:servis/hz.js");
+			mkDocNakl("", naklIds);
+		}
+	}
 
 	if (!isSilent)
 	{
@@ -840,13 +995,20 @@ function DpZvImporter_createZV(isSilent)
 		alert(aMsg.join("\n"));
 	}
 
+	if (self.isRecreate)
+	{
+		self.isRecreate = false;
+	}
+
+	DropTable(self.tmpExists);
+
 	return true;
 }
 
 /**
  * Проверка корректности значений полей json-файла
  */
-function DpZvImporter_checkValid(isSilent)
+function DpZvImporter_checkValid(isSilent, check)
 {
 	var args = Args([
 		{isSilent: Args.BOOL | Args.Optional, _default: false},
@@ -891,6 +1053,92 @@ function DpZvImporter_checkValid(isSilent)
 			UpdateTable(tmpCheck, m, true);
 			isErr = true;
 		});
+	}
+
+	strSQL = "select * from " + self.tmpHZV
+	var skipOrderIds = [];
+
+	forEachSQL(strSQL, function(it) {
+
+		strSQL = "select * from ^clrelclcl where fcl=" + getPar("CODPLAT")
+			+ " and fcod =" + sqlTo(it.FDBKR);
+		sn = snapRecord(strSQL);
+
+		if (!sn)
+		{
+			var m = {};
+			m.ORDER_ID = it.ORDER_ID;
+			m.FFILE = it.FFILE;
+			m.FVALUE = it.FDBKR;
+			m.DESCR = ru("строка заказа - не найдено контрагента с кодом "  + it.FDBKR, "рядок замовлення - не знайдено контрагента з кодом " + it.FDBKR);
+			UpdateTable(tmpCheck, m, true);
+			isErr = true;
+			skipOrderIds.push(it.ORDER_ID);
+		}
+
+		strSQL = "select * from ^clrelclcl where fcl=" + getPar("CODPLAT")
+			+ " and fcod =" + sqlTo(it.FSHOP);
+		sn = snapRecord(strSQL);
+
+		if (!sn)
+		{
+			var m = {};
+			m.ORDER_ID = it.ORDER_ID;
+			m.FFILE = it.FFILE;
+			m.FVALUE = it.FSHOP;
+			m.DESCR = ru("строка заказа - не найдено магазин с кодом " + it.FSHOP, "рядок замовлення - не знайдено магазин з кодом " + it.FSHOP);
+			UpdateTable(tmpCheck, m, true);
+			isErr = true;
+			skipOrderIds.push(it.ORDER_ID);
+		}
+
+		strSQLR = "select r.*, h.ffile from " + self.tmpRZV+" r"
+				+" inner join "+self.tmpHZV+" h on r.order_id = h.order_id"
+			+ " where r.order_id = " + sqlTo(it.ORDER_ID)
+
+		forEachSQL(strSQLR, function(item) {
+			strSQL = "select * from ^cl_nmk where fcod = " + sqlTo(item.FNMKL);
+			sn = snapRecord(strSQL);
+
+			if (!sn)
+			{
+				var m = {};
+				m.ORDER_ID = item.ORDER_ID;
+				m.FFILE = item.FFILE;
+				m.FVALUE = item.FNMKL;
+				m.DESCR = ru("строка заказа - не найдено номенклатуру с кодом " + item.FNMKL, "рядок замовлення - не знайдено номенклатуру з кодом " + item.FNMKL);
+				UpdateTable(tmpCheck, m, true);
+				isErr = true;
+				skipOrderIds.push(item.ORDER_ID);
+			}
+		})
+	})
+
+	if (isErr)
+	{
+		par = {};
+		par.onDrawGrid = function(oGrid)
+		{
+			with (oGrid.page())
+			{
+				cell("ORDER_ID", "ID замовлення|ID заказа", 12);
+				cell("FFILE", "Ім'я файлу|Имя файла", 15, "w");
+				cell("DESCR", "Опис помилки|Описание ошибки", 50, "w");
+				cell("FVALUE", "Значення поля в json-файлі|Значение поля в json-файле", 30, "w");
+			}
+		};
+
+		par.icon = ICON_ERROR;
+		par.message = ru("json файл содержит ошибки, эти заказы будут пропущены. Обратитесь к разработчику WEB-приложения", "json файл містить помилки, ці замовлення будуть пропущені. Зверніться до розробника WEB-додатку");
+		par.caption = ru("Протокол ошибок json-файла", "Протокол помилок json-файлу");
+
+		browse(OpenTable(tmpCheck), par, SW_MODAL);
+
+		ExecuteSQL("delete from " + self.tmpHZV + " where order_id in (" + skipOrderIds.join(",")+")");
+		ExecuteSQL("delete from " + self.tmpRZV + " where order_id in (" + skipOrderIds.join(",")+")");
+		ExecuteSQL("delete from " + tmpCheck + " where order_id in (" + skipOrderIds.join(",")+")");
+
+		isErr = false;
 	}
 
 	for (var i in aRFields)
@@ -960,6 +1208,7 @@ function DpZvImporter_checkValid(isSilent)
 	strSQL = "select "
 				+" hzv.fshop"
 				+", hzv.fdoc_dat"
+				+", hzv.order_id"
 				+", max(r.froute) as froute_auto"
 				+", max(hzv.froute) as froute"
 				+", max(r.favto) as favto"
@@ -975,153 +1224,302 @@ function DpZvImporter_checkValid(isSilent)
 			+" group by "
 				+" hzv.fshop"
 				+", hzv.fdoc_dat"
+				+", hzv.order_id"
 	ExecuteSQL(strSQL);
 
-	strSQL = " select froute, froute_auto from " + tmpTbl
-		 + " where froute <> froute_auto"
+	strSQL = " select order_id from " + tmpTbl;
 
-	forEachSQL(strSQL, function(item) {
-		// находим отличия кода маршрут с json файла и кода установленого автоматически
-		var m = {};
-		m.ORDER_ID = item.ORDER_ID;
-		m.FFILE = item.FFILE;
-		m.FVALUE = d_m_y(item.FDOC_DAT);
-		m.DESCR = ru("заголовок заказа - не удалось установить код маршрута для заказа с идентификатором "+item.ORDER_ID+" от "+d_m_y(item.FDOC_DAT)+" для магазина с кодом "+item.FSHOP+". Код маршрута с json-файла отличается от кода установленого автоматически, проверьте документ маршрутное задание на дату "+d_m_y(item.FDOC_DAT)
-		, "заголовок замовлення - не вдалось встановити код маршрута для замовлення з ідентифікатором "+item.ORDER_ID+" від "+d_m_y(item.FDOC_DAT)+" для магазина з кодом "+item.FSHOP+". Код маршруту з json-файлу відрізняється від коду установленого автоматично, перевірте документ маршрутне завдання на дату "+d_m_y(item.FDOC_DAT));
-		UpdateTable(tmpCheck, m, true);
-		isErr = true;
-	});
-
-	strSQL = "update "+self.tmpHZV
-			+" set froute = ("
-				+" select froute"
-				+" from "+tmpTbl
-				+" where fshop = "+self.tmpHZV+".fshop"
-					+" and fdoc_dat = "+self.tmpHZV+".fdoc_dat"
-			+")"
-			+", favto = ("
-				+" select favto"
-				+" from "+tmpTbl
-				+" where fshop = "+self.tmpHZV+".fshop"
-					+" and fdoc_dat = "+self.tmpHZV+".fdoc_dat"
-			+")"
-			+", fdriver = ("
-				+" select fdriver"
-				+" from "+tmpTbl
-				+" where fshop = "+self.tmpHZV+".fshop"
-					+" and fdoc_dat = "+self.tmpHZV+".fdoc_dat"
-			+")"
-			+", flyst = ("
-				+" select flyst"
-				+" from "+tmpTbl
-				+" where fshop = "+self.tmpHZV+".fshop"
-					+" and fdoc_dat = "+self.tmpHZV+".fdoc_dat"
-			+")"
-			+", ftime = ("
-				+" select ftime"
-				+" from "+tmpTbl
-				+" where fshop = "+self.tmpHZV+".fshop"
-					+" and fdoc_dat = "+self.tmpHZV+".fdoc_dat"
-			+")"
-			+" where exists ("
-				+" select 1"
-				+" from "+tmpTbl
-				+" where fshop = "+self.tmpHZV+".fshop"
-					+" and fdoc_dat = "+self.tmpHZV+".fdoc_dat"
-			+")"
-	ExecuteSQL(strSQL);
-
-	// проверка на наличие маршрута
-	strSQL = "select * from "+self.tmpHZV+" where froute = 0"
-	forEachSQL(strSQL, function(item)
+	var orderIds = fetchSQL(strSQL).map(function(e) { return e.ORDER_ID; });
+	if (check)
 	{
-		var m = {};
-		m.ORDER_ID = item.ORDER_ID;
-		m.FFILE = item.FFILE;
-		m.FVALUE = d_m_y(item.FDOC_DAT);
-		m.DESCR = ru("заголовок заказа - не удалось установить код маршрута для заказа с идентификатором "+item.ORDER_ID+" от "+d_m_y(item.FDOC_DAT)+" для магазина с кодом "+item.FSHOP+". Проверьте документ маршрутное задание на дату "+d_m_y(item.FDOC_DAT)
-		, "заголовок замовлення - не вдалось встановити код маршрута для замовлення з ідентифікатором "+item.ORDER_ID+" від "+d_m_y(item.FDOC_DAT)+" для магазина з кодом "+item.FSHOP+". Перевірте документ маршрутне завдання на дату "+d_m_y(item.FDOC_DAT));
-		UpdateTable(tmpCheck, m, true);
-		isErr = true;
-	});
+		strSQL = "select froute, order_id, fdoc_dat, fshop from " + self.tmpHZV + " where 1=1 "
+			+ (orderIds.length ? " and order_id not in (" + orderIds + ")" : "")
 
-	// проверка на наличие автомобиля
-	strSQL = "select * from "+self.tmpHZV+" where favto = 0"
-	forEachSQL(strSQL, function(item)
-	{
-		var m = {};
-		m.ORDER_ID = item.ORDER_ID;
-		m.FFILE = item.FFILE;
-		m.FVALUE = d_m_y(item.FDOC_DAT);
-		m.DESCR = ru("заголовок заказа - не удалось установить код автомобиля для заказа с идентификатором "+item.ORDER_ID+" от "+d_m_y(item.FDOC_DAT)+" для магазина с кодом "+item.FSHOP+". Проверьте документ маршрутное задание на дату "+d_m_y(item.FDOC_DAT)
-		, "заголовок замовлення - не вдалось встановити код автмобіля для замовлення з ідентифікатором "+item.ORDER_ID+" від "+d_m_y(item.FDOC_DAT)+" для магазина з кодом "+item.FSHOP+". Перевірте документ маршрутне завдання на дату "+d_m_y(item.FDOC_DAT));
-		UpdateTable(tmpCheck, m, true);
-		isErr = true;
-	});
-
-	// проверка на наличие водителя
-	strSQL = "select * from "+self.tmpHZV+" where fdriver = 0"
-	forEachSQL(strSQL, function(item)
-	{
-		var m = {};
-		m.ORDER_ID = item.ORDER_ID;
-		m.FFILE = item.FFILE;
-		m.FVALUE = d_m_y(item.FDOC_DAT);
-		m.DESCR = ru("заголовок заказа - не удалось установить код водителя для заказа с идентификатором "+item.ORDER_ID+" от "+d_m_y(item.FDOC_DAT)+" для магазина с кодом "+item.FSHOP+". Проверьте документ маршрутное задание на дату "+d_m_y(item.FDOC_DAT)
-		, "заголовок замовлення - не вдалось встановити код водія для замовлення з ідентифікатором "+item.ORDER_ID+" від "+d_m_y(item.FDOC_DAT)+" для магазина з кодом "+item.FSHOP+". Перевірте документ маршрутне завдання на дату "+d_m_y(item.FDOC_DAT));
-		UpdateTable(tmpCheck, m, true);
-		isErr = true;
-	});
-
-	// не должно быть одинаковых order_id
-	strSQL = "select order_id, count(order_id) as fcnt from "+self.tmpHZV+" group by order_id having count(order_id) > 1"
-	forEachSQL(strSQL, function(item)
-	{
-		var m = {};
-		m.ORDER_ID = item.ORDER_ID;
-		//m.FFILE = item.FFILE;
-		m.FVALUE = item.FCNT;
-		m.DESCR = ru("заголовок заказа - для разных документов существуют одинаковые идентификаторы, ID заказа - "+item.ORDER_ID+", количество документов - "+item.FCNT
-			, "заголовок замовлення - для різних документів існують однакові ідентифікатори, ID замовлення - "+item.ORDER_ID+", кількість документів - "+item.FCNT);
-		UpdateTable(tmpCheck, m, true);
-		isErr = true;
-	});
-
-	if (isErr)
-	{
-		par = {};
-		par.onDrawGrid = function(oGrid)
+		forEachSQL(strSQL, function(it)
 		{
-			with (oGrid.page())
+			var m = {};
+			m.ORDER_ID = it.ORDER_ID;
+			m.FSHOP = it.FSHOP;
+			m.FDOC_DAT = it.FDOC_DAT;
+
+			m.FROUTE = it.FROUTE;
+			m.FROUTE_AUTO = 0;
+			m.FLYST = 0;
+			m.FDRIVER = 0;
+			m.FAVTO = 0;
+			UpdateTable(tmpTbl, m, true);
+		});
+
+		strSQL = " select froute, froute_auto, order_id, fdoc_dat, fshop from " + tmpTbl
+			 + " where froute <> froute_auto or froute_auto = 0 or froute_auto is null"
+
+		skipOrderIds = [];
+
+		forEachSQL(strSQL, function(item) {
+			var fRoute = 0;
+
+			if (item.FROUTE_AUTO == 0 || item.FROUTE_AUTO == null)
 			{
-				cell("ORDER_ID", "ID замовлення|ID заказа", 12);
-				cell("FFILE", "Ім'я файлу|Имя файла", 15, "w");
-				cell("DESCR", "Опис помилки|Описание ошибки", 50, "w");
-				cell("FVALUE", "Значення поля в json-файлі|Значение поля в json-файле", 30, "w");
-			}
-		};
-		par.icon = ICON_ERROR;
-		par.message = ru("json файл содержит ошибки, импорт прерван. Обратитесь к разработчику WEB-приложения", "json файл містить помилки, імпорт перерваний. Зверніться до розробника WEB-додатку");
-		par.caption = ru("Протокол ошибок json-файла", "Протокол помилок json-файлу");
+				var oA = new DpAskEx();
+				var rem1 = ru("Внимание!", "Увага!");
+				var rem2 = ru("Для заказа с идентификатором "+item.ORDER_ID+" от "+d_m_y(item.FDOC_DAT)+" для магазина с кодом " + item.FSHOP + ": " + tfcl("TXT",  getPar("CODPLAT"), item.FSHOP),
+					"Для замовлення з ідентифікатором "+item.ORDER_ID+" від "+d_m_y(item.FDOC_DAT)+" для магазина з кодом " + item.FSHOP + ": " + tfcl("TXT",  getPar("CODPLAT"), item.FSHOP))
+				var rem3 = ru("не удалось установить код маршрута автоматически.\nУкажите маршрут вручную или используйте код, указанный в json-файле", "не вдалося встановити код маршруту автоматично.\nВкажіть маршрут вручну або використовуйте код, вказаний в json-файлі");
+				oA.add("REM", rem1, "AREM1");
+				oA.add("REM", rem2, "AREM2");
+				oA.add("REM", rem3, "AREM3");
+				oA.add("CL", "Маршрут", "ROUTE", item.FROUTE, getPar(const_GETPAR_CL_ROUTE));
 
-		if (!isSilent)
+				if (!oA.doAsk())
+				{
+					if (!confirm(ru("Продолжить создание заказов?", "Продовжити створення замовлень?")))
+					{
+						throw new Error(ru("Отменено пользователем", "Відмінено користувачем"));
+					}
+					skipOrderIds.push(item.ORDER_ID);
+					isErr = true;
+				}
+				else
+				{
+					fRoute = oA.get("ROUTE").getCod();
+				}
+			}
+			else if (item.FROUTE != item.FROUTE_AUTO)
+			{
+				var oA = new DpAskEx();
+				var rem1 = ru("Внимание!", "Увага!");
+				var rem2 = ru("Для заказа с идентификатором "+item.ORDER_ID+" от "+d_m_y(item.FDOC_DAT)+" для магазина с кодом " + item.FSHOP + ": " + tfcl("TXT",  getPar("CODPLAT"), item.FSHOP),
+					"Для замовлення з ідентифікатором "+item.ORDER_ID+" від "+d_m_y(item.FDOC_DAT)+" для магазина з кодом " + item.FSHOP + ": " + tfcl("TXT",  getPar("CODPLAT"), item.FSHOP) )
+				var rem3 = ru("Код маршрута, указанный в json-файле (" + item.FROUTE + ") отличается от кода, установленного автоматически ("+item.FROUTE_AUTO+")."
+							, "Код маршруту, вказаний в json-файлі (" + item.FROUTE + ") відрізняється від коду, встановленого автоматично ("+item.FROUTE_AUTO+").");
+				var rem4 = ru("Выберете код маршрута, который нужно использовать, или укажите новый из справочника маршрутов"
+							,"Вкажіть код маршруту, який необхідно використовувати, або виберіть новий з довідника маршрутів");
+				oA.add("REM", rem1, "AREM1");
+				oA.add("REM", rem2, "AREM2");
+				oA.add("REM", rem3, "AREM3");
+				oA.add("REM", rem4, "AREM4");
+
+				var rText = ru("Использовать код из json-файла ", "Використовувати код з json-файлу")
+						+ "|" + ru("Использовать код установленный автоматически ", "Використовувати код встановлений автоматично")
+				oA.add("RADIO", " ", "RROUTE", 0, rText);
+				oA.add("B", "Вибрати маршрут з довідника|Выбрать маршрут из справочника", "CLUSE", false);
+				oA.add("CL", "Маршрут", "ROUTE", item.FROUTE, getPar(const_GETPAR_CL_ROUTE));
+
+				oA.defCond("this.immediate(\"CLUSE\") == true","USECL");
+				oA.enable("ROUTE","USECL");
+
+				if (!oA.doAsk())
+				{
+					if (!confirm(ru("Продолжить создание заказов?", "Продовжити створення замовлень?")))
+					{
+						throw new Error(ru("Отменено пользователем", "Відмінено користувачем"));
+					}
+					skipOrderIds.push(item.ORDER_ID);
+					isErr = true;
+				}
+				else
+				{
+					var useCl = oA.get("CLUSE");
+					if (useCl)
+						fRoute = oA.get("ROUTE").getCod();
+					else
+					{
+						var codeUse = oA.get("RROUTE");
+						switch (codeUse) {
+							case 0:
+								fRoute = item.FROUTE;
+								break;
+							case 1:
+								fRoute = item.FROUTE_AUTO;
+								break;
+						}
+					}
+				}
+			}
+
+			strSQL = "update " + tmpTbl
+					+ " set froute = ("
+						+ " select r.froute as froute from ^hroute h "
+						+ " inner join ^rroute r on r.fid_doc=h.fwid "
+						+ " where r.froute = " + sqlTo(fRoute)
+							+ " and h.fdoc_dat=" + sqlTo(item.FDOC_DAT)
+						+ ") "
+					+ ", favto = ("
+						+ " select r.favto as favto from ^hroute h "
+						+ " inner join ^rroute r on r.fid_doc=h.fwid "
+						+ " where r.froute = " + sqlTo(fRoute)
+							+ " and h.fdoc_dat=" + sqlTo(item.FDOC_DAT)
+						+ ") "
+					+ ", fdriver = ("
+						+ " select r.fdriver as fdriver from ^hroute h "
+						+ " inner join ^rroute r on r.fid_doc=h.fwid "
+						+ " where r.froute = " + sqlTo(fRoute)
+							+ " and h.fdoc_dat=" + sqlTo(item.FDOC_DAT)
+						+ ") "
+					+ ", flyst = ("
+						+ " select r.flyst as flyst from ^hroute h "
+						+ " inner join ^rroute r on r.fid_doc=h.fwid "
+						+ " where r.froute = " + sqlTo(fRoute)
+							+ " and h.fdoc_dat=" + sqlTo(item.FDOC_DAT)
+						+ ") "
+					+ ", ftime = ("
+						+ " select r.ftime as ftime from ^hroute h "
+						+ " inner join ^rroute r on r.fid_doc=h.fwid "
+						+ " where r.froute = " + sqlTo(fRoute)
+							+ " and h.fdoc_dat=" + sqlTo(item.FDOC_DAT)
+						+ ") "
+					+ " where order_id = " + item.ORDER_ID
+						+ " and exists ( "
+							+ " select 1 from ^hroute h "
+							+ " inner join ^rroute r on r.fid_doc=h.fwid "
+							+ " where r.froute = " + sqlTo(fRoute)
+								+ " and h.fdoc_dat=" + sqlTo(item.FDOC_DAT)
+							+ ") "
+			ExecuteSQL(strSQL);
+		});
+
+		if (isErr)
 		{
+			if (skipOrderIds.length)
+			{
+				ExecuteSQL("delete from " + self.tmpHZV + " where order_id in (" + skipOrderIds.join(",")+")");
+				ExecuteSQL("delete from " + self.tmpRZV + " where order_id in (" + skipOrderIds.join(",")+")");
+				ExecuteSQL("delete from " + tmpTbl + " where order_id in (" + skipOrderIds.join(",")+")");
+				ExecuteSQL("delete from " + tmpCheck + " where order_id in (" + skipOrderIds.join(",")+")");
+
+			}
+			isErr = false;
+		}
+
+		strSQL = "update "+self.tmpHZV
+				+" set froute = ("
+					+" select froute"
+					+" from "+tmpTbl
+					+" where fshop = "+self.tmpHZV+".fshop"
+						+" and fdoc_dat = "+self.tmpHZV+".fdoc_dat"
+						+" and order_id = "+self.tmpHZV+".order_id"
+				+")"
+				+", favto = ("
+					+" select favto"
+					+" from "+tmpTbl
+					+" where fshop = "+self.tmpHZV+".fshop"
+						+" and fdoc_dat = "+self.tmpHZV+".fdoc_dat"
+						+" and order_id = "+self.tmpHZV+".order_id"
+				+")"
+				+", fdriver = ("
+					+" select fdriver"
+					+" from "+tmpTbl
+					+" where fshop = "+self.tmpHZV+".fshop"
+						+" and fdoc_dat = "+self.tmpHZV+".fdoc_dat"
+						+" and order_id = "+self.tmpHZV+".order_id"
+				+")"
+				+", flyst = ("
+					+" select flyst"
+					+" from "+tmpTbl
+					+" where fshop = "+self.tmpHZV+".fshop"
+						+" and fdoc_dat = "+self.tmpHZV+".fdoc_dat"
+						+" and order_id = "+self.tmpHZV+".order_id"
+				+")"
+				+", ftime = ("
+					+" select ftime"
+					+" from "+tmpTbl
+					+" where fshop = "+self.tmpHZV+".fshop"
+						+" and fdoc_dat = "+self.tmpHZV+".fdoc_dat"
+						+" and order_id = "+self.tmpHZV+".order_id"
+				+")"
+				+" where exists ("
+					+" select 1"
+					+" from "+tmpTbl
+					+" where fshop = "+self.tmpHZV+".fshop"
+						+" and fdoc_dat = "+self.tmpHZV+".fdoc_dat"
+				+")"
+		ExecuteSQL(strSQL);
+
+		// проверка на наличие маршрута
+		strSQL = "select * from "+self.tmpHZV+" where froute = 0"
+		forEachSQL(strSQL, function(item)
+		{
+			var m = {};
+			m.ORDER_ID = item.ORDER_ID;
+			m.FFILE = item.FFILE;
+			m.FVALUE = d_m_y(item.FDOC_DAT);
+			m.DESCR = ru("заголовок заказа - не удалось установить код маршрута для заказа с идентификатором "+item.ORDER_ID+" от "+d_m_y(item.FDOC_DAT)+" для магазина с кодом "+item.FSHOP+". Проверьте документ маршрутное задание на дату "+d_m_y(item.FDOC_DAT)
+			, "заголовок замовлення - не вдалось встановити код маршрута для замовлення з ідентифікатором "+item.ORDER_ID+" від "+d_m_y(item.FDOC_DAT)+" для магазина з кодом "+item.FSHOP+". Перевірте документ маршрутне завдання на дату "+d_m_y(item.FDOC_DAT));
+			UpdateTable(tmpCheck, m, true);
+			isErr = true;
+		});
+
+		// проверка на наличие автомобиля
+		strSQL = "select * from "+self.tmpHZV+" where favto = 0"
+		forEachSQL(strSQL, function(item)
+		{
+			var m = {};
+			m.ORDER_ID = item.ORDER_ID;
+			m.FFILE = item.FFILE;
+			m.FVALUE = d_m_y(item.FDOC_DAT);
+			m.DESCR = ru("заголовок заказа - не удалось установить код автомобиля для заказа с идентификатором "+item.ORDER_ID+" от "+d_m_y(item.FDOC_DAT)+" для магазина с кодом "+item.FSHOP+". Проверьте документ маршрутное задание на дату "+d_m_y(item.FDOC_DAT)
+			, "заголовок замовлення - не вдалось встановити код автмобіля для замовлення з ідентифікатором "+item.ORDER_ID+" від "+d_m_y(item.FDOC_DAT)+" для магазина з кодом "+item.FSHOP+". Перевірте документ маршрутне завдання на дату "+d_m_y(item.FDOC_DAT));
+			UpdateTable(tmpCheck, m, true);
+			isErr = true;
+		});
+
+		// проверка на наличие водителя
+		strSQL = "select * from "+self.tmpHZV+" where fdriver = 0"
+		forEachSQL(strSQL, function(item)
+		{
+			var m = {};
+			m.ORDER_ID = item.ORDER_ID;
+			m.FFILE = item.FFILE;
+			m.FVALUE = d_m_y(item.FDOC_DAT);
+			m.DESCR = ru("заголовок заказа - не удалось установить код водителя для заказа с идентификатором "+item.ORDER_ID+" от "+d_m_y(item.FDOC_DAT)+" для магазина с кодом "+item.FSHOP+". Проверьте документ маршрутное задание на дату "+d_m_y(item.FDOC_DAT)
+			, "заголовок замовлення - не вдалось встановити код водія для замовлення з ідентифікатором "+item.ORDER_ID+" від "+d_m_y(item.FDOC_DAT)+" для магазина з кодом "+item.FSHOP+". Перевірте документ маршрутне завдання на дату "+d_m_y(item.FDOC_DAT));
+			UpdateTable(tmpCheck, m, true);
+			isErr = true;
+		});
+
+		// не должно быть одинаковых order_id
+		strSQL = "select order_id, count(order_id) as fcnt from "+self.tmpHZV+" group by order_id having count(order_id) > 1"
+		forEachSQL(strSQL, function(item)
+		{
+			var m = {};
+			m.ORDER_ID = item.ORDER_ID;
+			//m.FFILE = item.FFILE;
+			m.FVALUE = item.FCNT;
+			m.DESCR = ru("заголовок заказа - для разных документов существуют одинаковые идентификаторы, ID заказа - "+item.ORDER_ID+", количество документов - "+item.FCNT
+				, "заголовок замовлення - для різних документів існують однакові ідентифікатори, ID замовлення - "+item.ORDER_ID+", кількість документів - "+item.FCNT);
+			UpdateTable(tmpCheck, m, true);
+			isErr = true;
+		});
+
+
+		if (isErr)
+		{
+			par = {};
+			par.onDrawGrid = function(oGrid)
+			{
+				with (oGrid.page())
+				{
+					cell("ORDER_ID", "ID замовлення|ID заказа", 12);
+					cell("FFILE", "Ім'я файлу|Имя файла", 15, "w");
+					cell("DESCR", "Опис помилки|Описание ошибки", 50, "w");
+					cell("FVALUE", "Значення поля в json-файлі|Значение поля в json-файле", 30, "w");
+				}
+			};
+			par.icon = ICON_ERROR;
+			par.message = ru("json файл содержит ошибки, эти заказы будут пропущены. Обратитесь к разработчику WEB-приложения", "json файл містить помилки, ці замовлення будуть пропущені. Зверніться до розробника WEB-додатку");
+			par.caption = ru("Протокол ошибок json-файла", "Протокол помилок json-файлу");
+
 			browse(OpenTable(tmpCheck), par, SW_MODAL);
-		}
 
-		if (isSilent)
-		{
-			for (var i in aHFields)
-			{
-				var fld = aHFields[i];
-				var strSQL = "DELETE "
-						+" FROM "+self.tmpHZV
-						+" WHERE "+fld+"_VALID = "+sqlFalse
-				ExecuteSQL(strSQL);
-			}
+			strSQL = "select * from " + self.tmpHZV
+				+ " where froute = 0 or favto = 0 or fdriver = 0"
+			forEachSQL(strSQL, function(it) {
+				ExecuteSQL("delete from " + self.tmpHZV + " where order_id = " + sqlTo(it.ORDER_ID));
+				ExecuteSQL("delete from " + self.tmpRZV + " where order_id = " + sqlTo(it.ORDER_ID));
+			});
 		}
-		return false;
 	}
+
 
 	return true;
 }
@@ -1197,7 +1595,7 @@ function DpZvImporter_compare()
 	var oCmp = new DpCmp();
 	var sKeyFields = "order_id";
 	oCmp.tblLeft	= tJsonHzv;			//из файла
-	oCmp.tblRight	= tHzv;					//из Дебета
+	oCmp.tblRight	= tHzv;				//из Дебета
 	oCmp.tblDstName = "ZVDIFF";			//префикс имен результирующих таблиц
 	oCmp.setKeyFields("", sKeyFields);
 	oCmp.doCmp();
@@ -1238,7 +1636,7 @@ function DpZvImporter_compare()
 	// разница в строках
 	var oCmp = new DpCmp();
 	var sKeyFields = "order_id, fnmkl_id, fkol";
-	oCmp.tblLeft	= tJsonRzv;			//из файла
+	oCmp.tblLeft	= tJsonRzv;				//из файла
 	oCmp.tblRight	= tRzv;					//из Дебета
 	oCmp.tblDstName = "ZVDIFF_R";			//префикс имен результирующих таблиц
 	oCmp.setKeyFields("", sKeyFields);
